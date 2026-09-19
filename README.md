@@ -6,7 +6,9 @@
 **集合语义**判断碱基互补，返回每对的最危险对齐、最长连续互补长度、涉及任一 3′端的
 连续长度及中文风险原因；同分时按固定偏移规则取唯一结果。批次与结果持久化到
 SQLite，支持事后查询。对已保存批次还可通过 `POST /api/batches/{id}/pool-plan`
-基于异二聚体结果构建冲突图，按 DSatur 风格确定性贪心把引物分配到若干引物池。
+基于异二聚体结果构建冲突图，按 DSatur 风格确定性贪心把引物分配到若干引物池；
+通过 `GET /api/batches/{base_id}/compare/{target_id}` 按引物名称构造稳定配对键，
+对比两个批次的配对风险升降（escalated / deescalated / introduced / resolved）。
 
 ---
 
@@ -25,6 +27,7 @@ docker compose up --build -d
 | 健康检查 | http://localhost:8000/health |
 | 批次接口 | http://localhost:8000/api/batches |
 | 引物分池 | `POST http://localhost:8000/api/batches/{id}/pool-plan` |
+| 批次风险对比 | `GET http://localhost:8000/api/batches/{base_id}/compare/{target_id}` |
 
 > 监听端口 **8000**。SQLite 数据库文件保存在命名卷 `primer-data` 内
 > （容器路径 `/data/primer_dimer.db`）。镜像构建期安装依赖、容器启动期自动建库
@@ -190,6 +193,82 @@ curl -s -X POST http://localhost:8000/api/batches/f98cdd27-.../pool-plan \
 * 容量允许但冲突图无法完全隔离时（如池数少于色数），算法仍分配全部引物，
   不可避免的冲突通过 `conflicts` 如实返回。
 
+### `GET /api/batches/{base_id}/compare/{target_id}` — 批次风险对比
+
+按引物**名称**构造稳定配对键，对比 base → target 两个已保存批次的配对风险：
+
+* **配对键**：自二聚体保留单名（如 `F`）；异二聚体忽略批次内提交顺序，
+  两名按字典序排列（如 `F|R`，与提交时谁先谁后无关）；
+* **风险等级全序** `low < medium < high`：两批次共有的配对，等级上升进入
+  `escalated`、下降进入 `deescalated`、不变不计入明细（计入
+  `summary.unchanged_pair_count`）；仅存在于 target 的配对进入 `introduced`，
+  仅存在于 base 的进入 `resolved`；
+* **同名引物序列变化**仍按同一配对键比较，并在明细中标记
+  `sequence_changed: true`（配对中任一同名引物序列不同即为 true）；
+* 四类明细各自按配对名确定性排序，相同输入结果稳定可复现；
+  任一批次不存在返回 `404`。
+
+```bash
+curl -s http://localhost:8000/api/batches/f98cdd27-.../compare/3fa9c1e2-...
+```
+
+返回示例：
+
+```json
+{
+  "summary": {
+    "base_batch_id": "f98cdd27-...",
+    "target_batch_id": "3fa9c1e2-...",
+    "base_pair_count": 15,
+    "target_pair_count": 15,
+    "common_pair_count": 10,
+    "unchanged_pair_count": 7,
+    "escalated_count": 1,
+    "deescalated_count": 2,
+    "introduced_count": 5,
+    "resolved_count": 5
+  },
+  "escalated": [
+    {
+      "pair_key": "A1|A2",
+      "name_a": "A1", "name_b": "A2", "is_self_dimer": false,
+      "sequence_changed": true,
+      "base_risk_level": "medium", "target_risk_level": "high"
+    }
+  ],
+  "deescalated": [
+    {
+      "pair_key": "D1|D2",
+      "name_a": "D1", "name_b": "D2", "is_self_dimer": false,
+      "sequence_changed": true,
+      "base_risk_level": "high", "target_risk_level": "low"
+    }
+  ],
+  "introduced": [
+    {
+      "pair_key": "New",
+      "name_a": "New", "name_b": "New", "is_self_dimer": true,
+      "sequence_changed": false,
+      "base_risk_level": null, "target_risk_level": "low"
+    }
+  ],
+  "resolved": [
+    {
+      "pair_key": "A1|Gone",
+      "name_a": "A1", "name_b": "Gone", "is_self_dimer": false,
+      "sequence_changed": false,
+      "base_risk_level": "high", "target_risk_level": null
+    }
+  ]
+}
+```
+
+* `introduced` 明细的 `base_risk_level` 为 `null`，`resolved` 明细的
+  `target_risk_level` 为 `null`；
+* `summary.common_pair_count = unchanged + escalated + deescalated`，
+  `introduced_count = target_pair_count - common_pair_count`，
+  `resolved_count = base_pair_count - common_pair_count`。
+
 ## 配对结果字段含义
 
 | 字段 | 含义 |
@@ -272,9 +351,10 @@ app/
   iupac.py      # IUPAC 碱基集合与互补矩阵
   dimer.py      # 错位枚举、连续互补/3′端长度、风险判定、同分规则
   pooling.py    # 异二聚体冲突图构建与 DSatur 风格确定性贪心分池
+  compare.py    # 批次间稳定配对键构造与风险升降分类（escalated 等四类）
   schemas.py    # Pydantic 模型与输入校验
   db.py         # SQLite 建表、写入、查询
-  services.py   # 批次计算编排（N 自二聚体 + N(N-1)/2 异二聚体）、分池编排
+  services.py   # 批次计算编排（N 自二聚体 + N(N-1)/2 异二聚体）、分池与对比编排
   main.py       # FastAPI 路由
   cli.py        # initdb 命令
 tests/          # pytest 算法与 API 测试

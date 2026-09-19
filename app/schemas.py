@@ -181,5 +181,52 @@ class PoolPlanOut(BaseModel):
     conflicts: list[PoolConflictEdgeOut]
 
 
+class ComparePairOut(BaseModel):
+    pair_key: str = Field(
+        description="稳定配对键：自二聚体为单名，异二聚体为按名称字典序的 A|B"
+    )
+    name_a: str = Field(description="配对键第一名称（异二聚体为字典序较小者）")
+    name_b: str = Field(description="配对键第二名称（自二聚体与 name_a 相同）")
+    is_self_dimer: bool
+    sequence_changed: bool = Field(
+        description="配对中任一同名引物在两批次间序列不同"
+    )
+    base_risk_level: str | None = Field(
+        description="base 批次风险等级（introduced 时为 null）"
+    )
+    target_risk_level: str | None = Field(
+        description="target 批次风险等级（resolved 时为 null）"
+    )
+
+
+class CompareSummary(BaseModel):
+    base_batch_id: str
+    target_batch_id: str
+    base_pair_count: int = Field(description="base 批次配对总数")
+    target_pair_count: int = Field(description="target 批次配对总数")
+    common_pair_count: int = Field(description="两批次共有的配对键数")
+    unchanged_pair_count: int = Field(description="共有配对中风险等级不变的数量")
+    escalated_count: int
+    deescalated_count: int
+    introduced_count: int
+    resolved_count: int
+
+
+class BatchCompareResult(BaseModel):
+    summary: CompareSummary
+    escalated: list[ComparePairOut] = Field(
+        description="共有配对中风险等级上升（low<medium<high）的明细，按配对名排序"
+    )
+    deescalated: list[ComparePairOut] = Field(
+        description="共有配对中风险等级下降的明细，按配对名排序"
+    )
+    introduced: list[ComparePairOut] = Field(
+        description="仅存在于 target 批次的配对明细，按配对名排序"
+    )
+    resolved: list[ComparePairOut] = Field(
+        description="仅存在于 base 批次的配对明细，按配对名排序"
+    )
+
+
 class ErrorOut(BaseModel):
     detail: str

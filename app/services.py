@@ -6,6 +6,7 @@ import json
 import uuid
 
 from . import db
+from .compare import PairDiff, compare_pair_risks
 from .dimer import PairResult, analyze_pair
 from .pooling import build_pool_plan
 
@@ -186,4 +187,67 @@ def plan_batch_pools(
         "total_conflicts": plan.total_conflicts,
         "pools": pools_out,
         "conflicts": conflicts_out,
+    }
+
+
+def _diff_to_out(d: PairDiff) -> dict:
+    return {
+        "pair_key": d.pair_key,
+        "name_a": d.name_a,
+        "name_b": d.name_b,
+        "is_self_dimer": d.is_self_dimer,
+        "sequence_changed": d.sequence_changed,
+        "base_risk_level": d.base_risk_level,
+        "target_risk_level": d.target_risk_level,
+    }
+
+
+def compare_batches(*, base_batch_id: str, target_batch_id: str) -> dict | None:
+    """对比两个已保存批次的配对风险（base → target）。
+
+    按引物名称构造稳定配对键（自二聚体保留单名，异二聚体忽略批次内
+    提交顺序），比较风险等级 low<medium<high，输出 escalated /
+    deescalated / introduced / resolved 四类明细与汇总。任一批次
+    不存在返回 None（由路由层转 404）。
+    """
+    with db.get_conn() as conn:
+        base = db.get_batch(conn, base_batch_id)
+        target = db.get_batch(conn, target_batch_id)
+        if base is None or target is None:
+            return None
+        base_primers = db.get_primers(conn, base_batch_id)
+        target_primers = db.get_primers(conn, target_batch_id)
+        base_pairs = db.get_pairs(conn, base_batch_id, risky_only=False)
+        target_pairs = db.get_pairs(conn, target_batch_id, risky_only=False)
+
+    result = compare_pair_risks(
+        base_pairs=[
+            (r["name_top"], r["name_bottom"], bool(r["is_self_dimer"]), r["risk_level"])
+            for r in base_pairs
+        ],
+        target_pairs=[
+            (r["name_top"], r["name_bottom"], bool(r["is_self_dimer"]), r["risk_level"])
+            for r in target_pairs
+        ],
+        base_sequences={r["name"]: r["sequence"] for r in base_primers},
+        target_sequences={r["name"]: r["sequence"] for r in target_primers},
+    )
+
+    return {
+        "summary": {
+            "base_batch_id": base_batch_id,
+            "target_batch_id": target_batch_id,
+            "base_pair_count": len(base_pairs),
+            "target_pair_count": len(target_pairs),
+            "common_pair_count": result.common_pair_count,
+            "unchanged_pair_count": result.unchanged_pair_count,
+            "escalated_count": len(result.escalated),
+            "deescalated_count": len(result.deescalated),
+            "introduced_count": len(result.introduced),
+            "resolved_count": len(result.resolved),
+        },
+        "escalated": [_diff_to_out(d) for d in result.escalated],
+        "deescalated": [_diff_to_out(d) for d in result.deescalated],
+        "introduced": [_diff_to_out(d) for d in result.introduced],
+        "resolved": [_diff_to_out(d) for d in result.resolved],
     }

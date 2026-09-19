@@ -1,4 +1,4 @@
-"""FastAPI 入口：批次提交、批次结果查询、批次列表。"""
+"""FastAPI 入口：批次提交、批次结果查询、批次列表、批次风险对比。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse
 
 from . import config, db
 from .schemas import (
+    BatchCompareResult,
     BatchCreate,
     BatchList,
     BatchResult,
@@ -18,7 +19,7 @@ from .schemas import (
     PoolPlanRequest,
     PrimerOut,
 )
-from .services import plan_batch_pools, run_batch
+from .services import compare_batches, plan_batch_pools, run_batch
 
 
 @asynccontextmanager
@@ -129,6 +130,20 @@ def get_batch(
 
 def _summary(row) -> BatchSummary:
     return BatchSummary(**dict(row))
+
+
+@app.get(
+    "/api/batches/{base_id}/compare/{target_id}",
+    tags=["batches"],
+    summary="对比两个批次的配对风险变化（base → target）",
+    response_model=BatchCompareResult,
+    responses={404: {"description": "任一批次不存在"}},
+)
+def compare_batch(base_id: str, target_id: str) -> BatchCompareResult:
+    result = compare_batches(base_batch_id=base_id, target_batch_id=target_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    return BatchCompareResult(**result)
 
 
 @app.post(
