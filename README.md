@@ -24,6 +24,7 @@ docker compose up --build -d
 | ReDoc 文档 | http://localhost:8000/redoc |
 | 健康检查 | http://localhost:8000/health |
 | 批次接口 | http://localhost:8000/api/batches |
+| 批次风险对比 | `GET http://localhost:8000/api/batches/{base_id}/compare/{target_id}` |
 | 引物分池 | `POST http://localhost:8000/api/batches/{id}/pool-plan` |
 
 > 监听端口 **8000**。SQLite 数据库文件保存在命名卷 `primer-data` 内
@@ -120,6 +121,92 @@ curl -s -X POST http://localhost:8000/api/batches \
 * 不存在的批次返回 `404`。
 
 ### `GET /api/batches?limit=50&offset=0` — 批次列表（按创建时间倒序）
+
+### `GET /api/batches/{base_id}/compare/{target_id}` — 两批次风险对比
+
+对比**基准批次**与**目标批次**的配对风险差异，用于回答“这一批相对上一批，
+哪些引物对的二聚体风险升高/降低、哪些新出现、哪些已消失”。
+
+* **稳定配对键**：按引物名称配对。自二聚体保留单名（如 `F`）；异二聚体
+  忽略批次内提交顺序，两个名称按字典序排序后以 `|` 连接（如 `F|R`），
+  因此同一对引物即使在两批次中前后顺序颠倒也会对齐比较；
+* **风险变化**：共有配对按 `low < medium < high` 全序比较——
+  目标批次等级更高为 `escalated`（升高），更低为 `deescalated`（降低），
+  相同则不计入明细（计入 `summary.unchanged`）；仅在目标批次出现为
+  `introduced`（新增），仅在基准批次出现为 `resolved`（消失）；
+* **`sequence_changed`**：同名引物在两批次中序列不同时，其涉及的所有
+  配对明细（含升高/降低/新增/消失）标记 `sequence_changed: true`，
+  但配对仍按同一配对键比较，不因序列变化而拆分；
+* **确定性排序**：四类明细均按配对名升序；`summary` 为各类计数，
+  另附 `unchanged` 与两批次各自的配对总数；
+* 任一批次不存在返回 `404`。该接口为只读，不修改任何数据，
+  历史 SQLite 数据库无需迁移即可使用。
+
+```bash
+# 先提交基准批次
+BASE=$(curl -s -X POST http://localhost:8000/api/batches \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "primers": [
+      {"name": "F", "sequence": "GATCGGGA"},
+      {"name": "R", "sequence": "CTTCCGACACTA"}
+    ],
+    "continuous_threshold": 4,
+    "three_prime_threshold": 3
+  }')
+BASE_ID=$(echo "$BASE" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+# 再提交目标批次（F 中间一个碱基 T->C，序列变化但名称不变）
+TARGET=$(curl -s -X POST http://localhost:8000/api/batches \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "primers": [
+      {"name": "F", "sequence": "GATCGGCA"},
+      {"name": "R", "sequence": "CTTCCGACACTA"}
+    ],
+    "continuous_threshold": 4,
+    "three_prime_threshold": 3
+  }')
+TARGET_ID=$(echo "$TARGET" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+# 对比
+curl -s "http://localhost:8000/api/batches/${BASE_ID}/compare/${TARGET_ID}"
+```
+
+返回示例：
+
+```json
+{
+  "base_batch_id": "f98cdd27-...",
+  "target_batch_id": "1a2b3c4d-...",
+  "summary": {
+    "escalated": 0,
+    "deescalated": 1,
+    "introduced": 0,
+    "resolved": 0,
+    "unchanged": 2,
+    "base_pair_count": 3,
+    "target_pair_count": 3
+  },
+  "escalated": [],
+  "deescalated": [
+    {
+      "pair_name": "F|R",
+      "is_self_dimer": false,
+      "base_risk_level": "high",
+      "target_risk_level": "medium",
+      "sequence_changed": true
+    }
+  ],
+  "introduced": [],
+  "resolved": []
+}
+```
+
+> 明细按四类固定顺序输出（`escalated` → `deescalated` →
+> `introduced` → `resolved`），每类内部按 `pair_name` 升序。
+> 风险等级比较的是筛查结论；两批次若使用了不同阈值，等级差异同样
+> 如实反映。
 
 ### `POST /api/batches/{id}/pool-plan` — 对已保存批次做引物分池
 

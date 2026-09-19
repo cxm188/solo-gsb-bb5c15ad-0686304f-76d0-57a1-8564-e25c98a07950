@@ -2,26 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
-import pytest
-
-
-@pytest.fixture(scope="session")
-def client(tmp_path_factory):
-    # 必须在导入 app.config 之前指定临时数据库路径
-    tmp_dir = tmp_path_factory.mktemp("db")
-    os.environ["PRIMER_DB_PATH"] = str(tmp_dir / "test.db")
-
-    from app import db, main
-
-    db.init_db()
-    from fastapi.testclient import TestClient
-
-    with TestClient(main.app) as c:
-        yield c
-
-
 PAYLOAD = {
     "primers": [
         {"name": "F", "sequence": "GGGGGAAAAA"},

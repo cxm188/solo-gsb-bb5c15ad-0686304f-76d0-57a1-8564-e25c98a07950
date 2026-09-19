@@ -183,3 +183,48 @@ class PoolPlanOut(BaseModel):
 
 class ErrorOut(BaseModel):
     detail: str
+
+
+_RISK_LEVEL_VALUES = ("high", "medium", "low")
+
+
+class BatchComparisonDetailOut(BaseModel):
+    pair_name: str = Field(
+        description=(
+            "稳定配对名：自二聚体为引物单名；异二聚体为按名称排序后的两个名字，"
+            "以 | 连接（与批次内提交顺序无关）"
+        )
+    )
+    is_self_dimer: bool
+    base_risk_level: str | None = Field(
+        None, description="基准批次风险等级 high/medium/low；新增配对为 null"
+    )
+    target_risk_level: str | None = Field(
+        None, description="对比批次风险等级 high/medium/low；消失配对为 null"
+    )
+    sequence_changed: bool = Field(
+        description=(
+            "同名引物在两批次间序列是否发生变化；对仅出现在一侧的配对，"
+            "只要其任一端引物在另一侧批次同名但序列不同即为 true"
+        )
+    )
+
+
+class BatchComparisonSummaryOut(BaseModel):
+    escalated: int = Field(description="风险升高（low<medium<high）的配对数")
+    deescalated: int = Field(description="风险降低的配对数")
+    introduced: int = Field(description="对比批次中新增的配对数")
+    resolved: int = Field(description="基准批次存在、对比批次消失的配对数")
+    unchanged: int = Field(description="两批次共有且风险等级不变的配对数")
+    base_pair_count: int
+    target_pair_count: int
+
+
+class BatchComparisonOut(BaseModel):
+    base_batch_id: str
+    target_batch_id: str
+    summary: BatchComparisonSummaryOut
+    escalated: list[BatchComparisonDetailOut]
+    deescalated: list[BatchComparisonDetailOut]
+    introduced: list[BatchComparisonDetailOut]
+    resolved: list[BatchComparisonDetailOut]

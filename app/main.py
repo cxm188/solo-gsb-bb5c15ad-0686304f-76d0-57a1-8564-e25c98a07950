@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse
 
 from . import config, db
 from .schemas import (
+    BatchComparisonOut,
     BatchCreate,
     BatchList,
     BatchResult,
@@ -18,7 +19,7 @@ from .schemas import (
     PoolPlanRequest,
     PrimerOut,
 )
-from .services import plan_batch_pools, run_batch
+from .services import compare_batches, plan_batch_pools, run_batch
 
 
 @asynccontextmanager
@@ -125,6 +126,20 @@ def get_batch(
     ),
 ) -> BatchResult:
     return _load_result(batch_id, risky_only=risky_only)
+
+
+@app.get(
+    "/api/batches/{base_id}/compare/{target_id}",
+    tags=["batches"],
+    summary="对比两个批次的配对风险变化",
+    response_model=BatchComparisonOut,
+    responses={404: {"description": "任一批次不存在"}},
+)
+def compare_batch_risks(base_id: str, target_id: str) -> BatchComparisonOut:
+    result = compare_batches(base_id=base_id, target_id=target_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    return BatchComparisonOut(**result)
 
 
 def _summary(row) -> BatchSummary:
